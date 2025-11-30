@@ -1,2 +1,2 @@
-dataset.csv filter=lfs diff=lfs merge=lfs -text
-cleaned_dataset.csv filter=lfs diff=lfs merge=lfs -text
+data/dataset.csv filter=lfs diff=lfs merge=lfs -text
+data/cleaned_dataset.csv filter=lfs diff=lfs merge=lfs -text
