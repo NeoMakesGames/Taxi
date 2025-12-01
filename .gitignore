@@ -1,2 +1,2 @@
-__pycache__/taxonomic_tree.cpython-311.pyc
+__pycache__/*
 faiss_models/*.index
