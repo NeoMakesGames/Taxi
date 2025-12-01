@@ -96,17 +96,6 @@ def train_node(node, df, X_vectorized, current_level_idx, min_samples=10):
                 
                 train_node(child_node, child_df, X_child, next_level_idx, min_samples)
 
-def predict_hierarchy(node, X_vectorized):
-    """
-    Predice la ruta completa para una sola muestra o lote.
-    Por simplicidad, ¿hacemos la predicción por lotes iterativamente?
-    La predicción jerárquica es difícil de vectorizar eficientemente para lotes si el árbol está desequilibrado.
-    Hagámoslo fila por fila para mayor claridad o usemos un enfoque basado en máscaras.
-    """
-    # Esta es una parte compleja. Para una "cosa tipo árbol de decisión", ¿quizás solo entrenarlo sea suficiente por ahora?
-    # O implementar un predictor simple de una sola muestra.
-    pass
-
 def predict_single(node, x_vec):
     result = {}
     curr = node
