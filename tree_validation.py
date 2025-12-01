@@ -34,19 +34,19 @@ def evaluate_model(root, X_test, df_test):
         for i, pred in enumerate(predictions):
             actual = df_test.iloc[i]
             
-            # True label
+            # Etiqueta verdadera
             y_true.append(actual[level])
             
-            # Predicted label
+            # Etiqueta predicha
             if level in pred:
                 y_pred.append(pred[level])
                 if pred[level] == actual[level]:
                     correct_count += 1
             else:
-                y_pred.append("Unpredicted") # Treat missing prediction as a distinct class
+                y_pred.append("Unpredicted") # Tratar predicción faltante como una clase distinta
         
         acc = accuracy_score(y_true, y_pred)
-        # Use weighted F1 score to account for class imbalance
+        # Usar puntaje F1 ponderado para tener en cuenta el desequilibrio de clases
         f1 = f1_score(y_true, y_pred, average='weighted', zero_division=0)
         
         print(f"{level:<15} | {acc:.2%}     | {f1:.4f}     | {correct_count}/{total_samples}")
@@ -54,7 +54,7 @@ def evaluate_model(root, X_test, df_test):
     print(f"\nTiempo de evaluación: {time.time() - start_time:.2f}s")
 
 def main():
-    # We need to reproduce the data loading and splitting exactly as in taxonomic_tree.py
+    # Necesitamos reproducir la carga y división de datos exactamente como en taxonomic_tree.py
     DATASET_PERCENTAGE = 0.1
     
     print("Cargando datos para validación...")
@@ -66,17 +66,17 @@ def main():
         print("Datos no encontrados.")
         return
 
-    # Clean data
+    # Limpiar datos
     df = df.dropna(subset=['Sequence'] + HIERARCHY)
     print(f"Datos cargados: {len(df)} muestras")
 
-    # Vectorize
+    # Vectorizar
     print("Vectorizando...")
-    # Note: We must use the same vectorizer parameters
+    # Nota: Debemos usar los mismos parámetros del vectorizador
     vectorizer = CountVectorizer(analyzer='char', ngram_range=(5, 5), lowercase=False, max_features=5000)
     X = vectorizer.fit_transform(df['Sequence'])
     
-    # Split train/test
+    # Dividir entrenamiento/prueba
     indices = np.arange(len(df))
     _, X_test, _, y_test_idx = train_test_split(X, indices, test_size=0.2, random_state=42)
     

@@ -6,7 +6,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 import joblib
 
-# Define the hierarchy
+# Definir la jerarquía
 HIERARCHY = ['Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species']
 
 class TaxonomicNode:
@@ -36,14 +36,14 @@ def train_node(node, df, X_vectorized, current_level_idx, min_samples=10):
     current_level = HIERARCHY[current_level_idx]
     target = df[current_level]
     
-    # If only one class, we don't need a classifier, but we still need to traverse down
+    # Si solo hay una clase, no necesitamos un clasificador, pero aún necesitamos descender
     unique_classes = target.unique()
     if len(unique_classes) == 1:
-        # Create a dummy model that always predicts this class
+        # Crear un modelo ficticio que siempre prediga esta clase
         node.model = ConstantModel(unique_classes[0])
         node.classes_ = unique_classes
         
-        # Recurse immediately
+        # Recursión inmediata
         if current_level_idx + 1 < len(HIERARCHY):
             next_level_idx = current_level_idx + 1
             class_label = unique_classes[0]
@@ -51,7 +51,7 @@ def train_node(node, df, X_vectorized, current_level_idx, min_samples=10):
             child_node = TaxonomicNode(HIERARCHY[next_level_idx], parent_value=class_label)
             node.children[class_label] = child_node
             
-            # Pass all data to child
+            # Pasar todos los datos al hijo
             train_node(child_node, df, X_vectorized, next_level_idx, min_samples)
         return
 
@@ -60,38 +60,38 @@ def train_node(node, df, X_vectorized, current_level_idx, min_samples=10):
 
     print(f"Entrenando nodo: Nivel={current_level}, Padre={node.parent_value}, Muestras={len(df)}, Clases={len(unique_classes)}")
 
-    # Train model for this node
-    # Using DecisionTreeClassifier for speed and "tree-like" nature
+    # Entrenar modelo para este nodo
+    # Usando DecisionTreeClassifier por velocidad y naturaleza "tipo árbol"
     clf = DecisionTreeClassifier(max_depth=10, random_state=42)
     
-    # We need to map the indices of the current df to the rows in X_vectorized
-    # Since X_vectorized is a global sparse matrix, we need to slice it.
-    # Assuming df has preserved its original indices or we reset index?
-    # Better to pass the subset of X corresponding to df.
+    # Necesitamos mapear los índices del df actual a las filas en X_vectorized
+    # Dado que X_vectorized es una matriz dispersa global, necesitamos cortarla.
+    # ¿Asumiendo que df ha conservado sus índices originales o reiniciamos el índice?
+    # Mejor pasar el subconjunto de X correspondiente a df.
     
-    # To avoid complex index tracking, let's assume X_vectorized is aligned with df
-    # This is tricky during recursion if we just pass df.
-    # Strategy: Pass indices.
+    # Para evitar el seguimiento complejo de índices, asumamos que X_vectorized está alineado con df
+    # Esto es complicado durante la recursión si solo pasamos df.
+    # Estrategia: Pasar índices.
     
     clf.fit(X_vectorized, target)
     node.model = clf
     node.classes_ = clf.classes_
 
-    # If we are not at the bottom, recurse
+    # Si no estamos en el fondo, recursión
     if current_level_idx + 1 < len(HIERARCHY):
         next_level_idx = current_level_idx + 1
         
         for class_label in node.classes_:
-            # Filter data for this child
+            # Filtrar datos para este hijo
             mask = (target == class_label)
             child_df = df[mask]
-            child_indices = np.where(mask)[0] # Indices relative to the current X_vectorized slice
+            child_indices = np.where(mask)[0] # Índices relativos al corte actual de X_vectorized
             
             if len(child_df) > min_samples:
                 child_node = TaxonomicNode(HIERARCHY[next_level_idx], parent_value=class_label)
                 node.children[class_label] = child_node
                 
-                # Slice X for the child
+                # Cortar X para el hijo
                 X_child = X_vectorized[child_indices]
                 
                 train_node(child_node, child_df, X_child, next_level_idx, min_samples)
@@ -103,8 +103,8 @@ def predict_hierarchy(node, X_vectorized):
     La predicción jerárquica es difícil de vectorizar eficientemente para lotes si el árbol está desequilibrado.
     Hagámoslo fila por fila para mayor claridad o usemos un enfoque basado en máscaras.
     """
-    # This is a complex part. For a "decision tree like thing", maybe just training it is enough for now?
-    # Or implementing a simple single-sample predictor.
+    # Esta es una parte compleja. Para una "cosa tipo árbol de decisión", ¿quizás solo entrenarlo sea suficiente por ahora?
+    # O implementar un predictor simple de una sola muestra.
     pass
 
 def predict_single(node, x_vec):
@@ -131,37 +131,37 @@ def main():
         print("Datos no encontrados.")
         return
 
-    # Clean data
+    # Limpiar datos
     df = df.dropna(subset=['Sequence'] + HIERARCHY)
     print(f"Datos cargados: {len(df)} muestras")
 
-    # Vectorize
+    # Vectorizar
     print("Vectorizando...")
     vectorizer = CountVectorizer(analyzer='char', ngram_range=(5, 5), lowercase=False, max_features=5000)
     X = vectorizer.fit_transform(df['Sequence'])
     
-    # Split train/test
-    # For hierarchical, it's easier to split first, then build tree on train
+    # Dividir entrenamiento/prueba
+    # Para jerárquico, es más fácil dividir primero, luego construir el árbol en entrenamiento
     indices = np.arange(len(df))
     X_train, X_test, y_train_idx, y_test_idx = train_test_split(X, indices, test_size=0.2, random_state=42)
     
     df_train = df.iloc[y_train_idx]
-    df_test = df.iloc[y_test_idx] # Not strictly needed for training, but for eval
+    df_test = df.iloc[y_test_idx] # No estrictamente necesario para entrenamiento, pero sí para evaluación
 
     print("Construyendo Árbol Taxonómico...")
     root = TaxonomicNode(HIERARCHY[0], parent_value="ROOT")
     
-    # Train
+    # Entrenar
     train_node(root, df_train, X_train, 0, min_samples=20)
     
     print("Árbol construido.")
     
-    # Save the model
+    # Guardar el modelo
     print("Guardando modelo en taxonomic_tree.pkl...")
     joblib.dump({'root': root, 'vectorizer': vectorizer}, 'taxonomic_tree.pkl')
     print("Modelo guardado.")
     
-    # Evaluate on a few test samples
+    # Evaluar en algunas muestras de prueba
     print("\nEvaluando en 5 muestras de prueba:")
     for i in range(5):
         x_sample = X_test[i]
