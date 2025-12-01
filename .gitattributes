@@ -1,2 +1,4 @@
 data/dataset.csv filter=lfs diff=lfs merge=lfs -text
 data/cleaned_dataset.csv filter=lfs diff=lfs merge=lfs -text
+*.csv filter=lfs diff=lfs merge=lfs -text
+*.fasta filter=lfs diff=lfs merge=lfs -text
