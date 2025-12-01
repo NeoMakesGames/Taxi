@@ -7,48 +7,48 @@ import os
 import numpy as np
 from sklearn.model_selection import train_test_split
 
-# Configuration
+# Configuración
 CSV_PATH = 'data/final_dataset.csv'
 MODEL_NAME = 'quietflamingo/dnabert2-no-flashattention'
 CHROMA_DB_PATH = 'chroma_db'
 COLLECTION_NAME = 'dna_sequences'
 MAX_LEN = 256 
 K_NEIGHBORS = 5
-TEST_SAMPLE_SIZE = 100 # Number of test samples to evaluate
+TEST_SAMPLE_SIZE = 100 # Número de muestras de prueba para evaluar
 
-# Initialize Device
+# Inicializar Dispositivo
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
+print(f"Usando dispositivo: {device}")
 
-# Initialize Model and Tokenizer
-print("Loading model and tokenizer...")
+# Inicializar Modelo y Tokenizador
+print("Cargando modelo y tokenizador...")
 try:
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
     model = AutoModel.from_pretrained(MODEL_NAME, trust_remote_code=True).to(device)
     model.eval()
 except Exception as e:
-    print(f"Error loading model: {e}")
+    print(f"Error cargando el modelo: {e}")
     exit(1)
 
-# Initialize ChromaDB
-print("Connecting to ChromaDB...")
+# Inicializar ChromaDB
+print("Conectando a ChromaDB...")
 try:
     client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
     try:
         collection = client.get_collection(name=COLLECTION_NAME)
         count = collection.count()
-        print(f"Connected to collection '{COLLECTION_NAME}' with {count} documents.")
+        print(f"Conectado a la colección '{COLLECTION_NAME}' con {count} documentos.")
         if count == 0:
-            print("Warning: Collection is empty. Please run embed_sequences.py first.")
+            print("Advertencia: La colección está vacía. Por favor ejecute embed_sequences.py primero.")
             exit(1)
     except Exception as e:
-        print(f"Collection '{COLLECTION_NAME}' not found. Please run embed_sequences.py first.")
+        print(f"Colección '{COLLECTION_NAME}' no encontrada. Por favor ejecute embed_sequences.py primero.")
         exit(1)
 except Exception as e:
-    print(f"Error connecting to ChromaDB: {e}")
+    print(f"Error conectando a ChromaDB: {e}")
     exit(1)
 
-# Function to generate embeddings
+# Función para generar embeddings
 def get_embeddings(sequences):
     sequences = [s.replace('\n', '').strip() for s in sequences]
     inputs = tokenizer(sequences, return_tensors="pt", padding=True, truncation=True, max_length=MAX_LEN)
@@ -58,34 +58,34 @@ def get_embeddings(sequences):
     embeddings = outputs[0][:, 0, :].cpu().numpy()
     return embeddings
 
-# Re-load Test Data
-print(f"Reloading dataset to reconstruct test split...")
+# Recargar Datos de Prueba
+print(f"Recargando conjunto de datos para reconstruir la división de prueba...")
 if not os.path.exists(CSV_PATH):
-    print(f"File not found: {CSV_PATH}")
+    print(f"Archivo no encontrado: {CSV_PATH}")
     exit(1)
 
 chunks = []
 read_chunk_size = 50000 
 try:
-    # We must use the exact same logic as embed_sequences.py to get the same split
-    for chunk in tqdm(pd.read_csv(CSV_PATH, chunksize=read_chunk_size), desc="Reading and sampling"):
+    # Debemos usar exactamente la misma lógica que embed_sequences.py para obtener la misma división
+    for chunk in tqdm(pd.read_csv(CSV_PATH, chunksize=read_chunk_size), desc="Leyendo y muestreando"):
         sampled_chunk = chunk.sample(frac=0.1, random_state=42)
         chunks.append(sampled_chunk)
 except Exception as e:
-    print(f"Error reading CSV: {e}")
+    print(f"Error leyendo CSV: {e}")
     exit(1)
 
 df_sample = pd.concat(chunks)
 train_df, test_df = train_test_split(df_sample, test_size=0.2, random_state=42)
-print(f"Total Test set size: {len(test_df)}")
+print(f"Tamaño total del conjunto de prueba: {len(test_df)}")
 
-# Perform Search
-print(f"Running search on a subset of {TEST_SAMPLE_SIZE} test samples...")
+# Realizar Búsqueda
+print(f"Ejecutando búsqueda en un subconjunto de {TEST_SAMPLE_SIZE} muestras de prueba...")
 test_subset = test_df.head(TEST_SAMPLE_SIZE)
 
 results = []
 
-for idx, row in tqdm(test_subset.iterrows(), total=len(test_subset), desc="Searching"):
+for idx, row in tqdm(test_subset.iterrows(), total=len(test_subset), desc="Buscando"):
     sequence = str(row['Sequence'])
     true_metadata = {
         'Kingdom': row['Kingdom'],
@@ -97,45 +97,45 @@ for idx, row in tqdm(test_subset.iterrows(), total=len(test_subset), desc="Searc
         'Species': row['Species']
     }
     
-    # Generate embedding
+    # Generar embedding
     try:
         embedding = get_embeddings([sequence])[0]
     except Exception as e:
-        print(f"Error embedding sequence: {e}")
+        print(f"Error generando embedding de secuencia: {e}")
         continue
         
-    # Query ChromaDB
-    # Filter by split='train' to ensure we retrieve neighbors from the training set
+    # Consultar ChromaDB
+    # Filtrar por split='train' para asegurar que recuperamos vecinos del conjunto de entrenamiento
     query_result = collection.query(
         query_embeddings=[embedding.tolist()],
         n_results=K_NEIGHBORS,
         where={"split": "train"} 
     )
     
-    # Analyze results
+    # Analizar resultados
     if not query_result['metadatas'] or not query_result['metadatas'][0]:
         continue
         
-    # Get the top match (nearest neighbor)
+    # Obtener la mejor coincidencia (vecino más cercano)
     top_match = query_result['metadatas'][0][0]
     distance = query_result['distances'][0][0]
     
     match_correct = {}
     for level in ['Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species']:
-        # Handle NaN/None
+        # Manejar NaN/None
         true_val = str(true_metadata[level]) if pd.notna(true_metadata[level]) else "Unknown"
         pred_val = top_match.get(level, "Unknown")
         match_correct[level] = (true_val == pred_val)
     
     results.append(match_correct)
 
-# Calculate Accuracy
+# Calcular Precisión
 if results:
     df_results = pd.DataFrame(results)
-    print("\n--- Search Accuracy (Top-1 Neighbor from Train Set) ---")
-    print(f"Evaluated on {len(results)} samples.")
+    print("\n--- Precisión de Búsqueda (Top-1 Vecino del Conjunto de Entrenamiento) ---")
+    print(f"Evaluado en {len(results)} muestras.")
     for col in df_results.columns:
         acc = df_results[col].mean()
         print(f"{col}: {acc:.2%}")
 else:
-    print("No results generated.")
+    print("No se generaron resultados.")

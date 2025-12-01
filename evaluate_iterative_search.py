@@ -9,7 +9,7 @@ from sklearn.model_selection import train_test_split
 from collections import Counter
 from sklearn.metrics import accuracy_score, recall_score, f1_score, precision_score
 
-# Configuration
+# Configuración
 CSV_PATH = 'data/final_dataset.csv'
 MODEL_NAME = 'quietflamingo/dnabert2-no-flashattention'
 CHROMA_DB_PATH = 'chroma_db'
@@ -18,58 +18,58 @@ MAX_LEN = 256
 K_NEIGHBORS = 10 
 HIERARCHY = ['Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species']
 
-# Initialize Device
+# Inicializar Dispositivo
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
+print(f"Usando dispositivo: {device}")
 
-# Initialize Model and Tokenizer
-print("Loading model and tokenizer...")
+# Inicializar Modelo y Tokenizador
+print("Cargando modelo y tokenizador...")
 try:
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
     model = AutoModel.from_pretrained(MODEL_NAME, trust_remote_code=True).to(device)
     model.eval()
 except Exception as e:
-    print(f"Error loading model: {e}")
+    print(f"Error cargando el modelo: {e}")
     exit(1)
 
-# Initialize ChromaDB
-print("Connecting to ChromaDB...")
+# Inicializar ChromaDB
+print("Conectando a ChromaDB...")
 try:
     client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
     collection = client.get_collection(name=COLLECTION_NAME)
-    print(f"Connected to collection '{COLLECTION_NAME}' with {collection.count()} documents.")
+    print(f"Conectado a la colección '{COLLECTION_NAME}' con {collection.count()} documentos.")
 except Exception as e:
-    print(f"Error connecting to ChromaDB: {e}")
+    print(f"Error conectando a ChromaDB: {e}")
     exit(1)
 
-# Re-load Test Data
-print(f"Reloading dataset to reconstruct test split...")
+# Recargar Datos de Prueba
+print(f"Recargando conjunto de datos para reconstruir la división de prueba...")
 if not os.path.exists(CSV_PATH):
-    print(f"File not found: {CSV_PATH}")
+    print(f"Archivo no encontrado: {CSV_PATH}")
     exit(1)
 
 chunks = []
 read_chunk_size = 50000 
 try:
-    for chunk in tqdm(pd.read_csv(CSV_PATH, chunksize=read_chunk_size), desc="Reading and sampling"):
+    for chunk in tqdm(pd.read_csv(CSV_PATH, chunksize=read_chunk_size), desc="Leyendo y muestreando"):
         sampled_chunk = chunk.sample(frac=0.1, random_state=42)
         chunks.append(sampled_chunk)
 except Exception as e:
-    print(f"Error reading CSV: {e}")
+    print(f"Error leyendo CSV: {e}")
     exit(1)
 
 df_sample = pd.concat(chunks)
 train_df, test_df = train_test_split(df_sample, test_size=0.2, random_state=42)
-print(f"Total Test set size: {len(test_df)}")
+print(f"Tamaño total del conjunto de prueba: {len(test_df)}")
 
-# Limit to 300 samples for testing
+# Limitar a 300 muestras para prueba
 test_df = test_df.head(300)
-print(f"Limiting evaluation to {len(test_df)} samples.")
+print(f"Limitando evaluación a {len(test_df)} muestras.")
 
-# Function to generate embeddings in batches
+# Función para generar embeddings en lotes
 def get_embeddings_batched(sequences, batch_size=32):
     all_embeddings = []
-    for i in tqdm(range(0, len(sequences), batch_size), desc="Generating Embeddings"):
+    for i in tqdm(range(0, len(sequences), batch_size), desc="Generando Embeddings"):
         batch = sequences[i:i+batch_size]
         batch = [s.replace('\n', '').strip() for s in batch]
         inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True, max_length=MAX_LEN)
@@ -80,25 +80,25 @@ def get_embeddings_batched(sequences, batch_size=32):
         all_embeddings.append(embeddings)
     return np.vstack(all_embeddings)
 
-# Iterative Search Logic (Optimized)
+# Lógica de Búsqueda Iterativa (Optimizada)
 def iterative_search_from_embedding(embedding, collection, k=K_NEIGHBORS):
     current_filter = {"split": "train"}
     predicted_taxonomy = {}
     
     for level in HIERARCHY:
-        # Construct ChromaDB where clause
+        # Construir cláusula where de ChromaDB
         if len(current_filter) > 1:
             where_clause = {"$and": [{k: v} for k, v in current_filter.items()]}
         else:
             where_clause = current_filter
 
-        # Query ChromaDB with current filter
+        # Consultar ChromaDB con filtro actual
         try:
             results = collection.query(
                 query_embeddings=[embedding.tolist()],
                 n_results=k,
                 where=where_clause,
-                include=['metadatas'] # Optimization: Only fetch metadata
+                include=['metadatas'] # Optimización: Solo obtener metadatos
             )
         except Exception as e:
             break
@@ -125,7 +125,7 @@ def iterative_search_from_embedding(embedding, collection, k=K_NEIGHBORS):
         else:
             break
             
-    # Calculate overall confidence score
+    # Calcular puntaje de confianza general
     total_weight = 0
     weighted_confidence_sum = 0
     weights = {'Kingdom': 7, 'Phylum': 6, 'Class': 5, 'Order': 4, 'Family': 3, 'Genus': 2, 'Species': 1}
@@ -139,11 +139,11 @@ def iterative_search_from_embedding(embedding, collection, k=K_NEIGHBORS):
     
     return predicted_taxonomy, overall_confidence
 
-# Evaluation Loop
-print(f"Starting evaluation on {len(test_df)} samples...")
+# Bucle de Evaluación
+print(f"Iniciando evaluación en {len(test_df)} muestras...")
 
-# Pre-compute embeddings
-print("Pre-computing embeddings for test set...")
+# Pre-calcular embeddings
+print("Pre-calculando embeddings para el conjunto de prueba...")
 test_sequences = test_df['Sequence'].astype(str).tolist()
 test_embeddings = get_embeddings_batched(test_sequences, batch_size=64)
 
@@ -151,8 +151,8 @@ y_true = {level: [] for level in HIERARCHY}
 y_pred = {level: [] for level in HIERARCHY}
 confidences = []
 
-print("Running iterative search...")
-for idx, (embedding, (_, row)) in tqdm(enumerate(zip(test_embeddings, test_df.iterrows())), total=len(test_df), desc="Evaluating"):
+print("Ejecutando búsqueda iterativa...")
+for idx, (embedding, (_, row)) in tqdm(enumerate(zip(test_embeddings, test_df.iterrows())), total=len(test_df), desc="Evaluando"):
     true_tax = {level: str(row[level]) if pd.notna(row[level]) else "Unknown" for level in HIERARCHY}
     
     prediction, overall_score = iterative_search_from_embedding(embedding, collection)
@@ -166,18 +166,18 @@ for idx, (embedding, (_, row)) in tqdm(enumerate(zip(test_embeddings, test_df.it
             y_pred[level].append("Unpredicted")
 
 
-# Calculate Metrics
-print("\n--- Evaluation Results ---")
+# Calcular Métricas
+print("\n--- Resultados de Evaluación ---")
 metrics = []
 
 for level in HIERARCHY:
-    # Filter out 'Unknown' in ground truth if desired? 
-    # Usually we want to evaluate against known ground truth.
-    # But here we keep everything.
+    # ¿Filtrar 'Unknown' en la verdad terreno si se desea?
+    # Usualmente queremos evaluar contra la verdad terreno conocida.
+    # Pero aquí mantenemos todo.
     
     acc = accuracy_score(y_true[level], y_pred[level])
     
-    # Weighted average for multi-class
+    # Promedio ponderado para multi-clase
     prec = precision_score(y_true[level], y_pred[level], average='weighted', zero_division=0)
     rec = recall_score(y_true[level], y_pred[level], average='weighted', zero_division=0)
     f1 = f1_score(y_true[level], y_pred[level], average='weighted', zero_division=0)
@@ -193,8 +193,8 @@ for level in HIERARCHY:
 df_metrics = pd.DataFrame(metrics)
 print(df_metrics.to_string(index=False))
 
-print(f"\nAverage Overall Confidence: {np.mean(confidences):.4f}")
+print(f"\nConfianza General Promedio: {np.mean(confidences):.4f}")
 
-# Save results to CSV
+# Guardar resultados en CSV
 df_metrics.to_csv("iterative_search_results.csv", index=False)
-print("Results saved to iterative_search_results.csv")
+print("Resultados guardados en iterative_search_results.csv")

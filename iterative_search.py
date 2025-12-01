@@ -8,41 +8,41 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from collections import Counter
 
-# Configuration
+# Configuración
 CSV_PATH = 'data/final_dataset.csv'
 MODEL_NAME = 'quietflamingo/dnabert2-no-flashattention'
 CHROMA_DB_PATH = 'chroma_db'
 COLLECTION_NAME = 'dna_sequences'
 MAX_LEN = 256 
-K_NEIGHBORS = 10 # User mentioned "top 10"
+K_NEIGHBORS = 10 # El usuario mencionó "top 10"
 TEST_SAMPLE_SIZE = 10
 HIERARCHY = ['Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species']
 
-# Initialize Device
+# Inicializar Dispositivo
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
+print(f"Usando dispositivo: {device}")
 
-# Initialize Model and Tokenizer
-print("Loading model and tokenizer...")
+# Inicializar Modelo y Tokenizador
+print("Cargando modelo y tokenizador...")
 try:
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
     model = AutoModel.from_pretrained(MODEL_NAME, trust_remote_code=True).to(device)
     model.eval()
 except Exception as e:
-    print(f"Error loading model: {e}")
+    print(f"Error cargando el modelo: {e}")
     exit(1)
 
-# Initialize ChromaDB
-print("Connecting to ChromaDB...")
+# Inicializar ChromaDB
+print("Conectando a ChromaDB...")
 try:
     client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
     collection = client.get_collection(name=COLLECTION_NAME)
-    print(f"Connected to collection '{COLLECTION_NAME}' with {collection.count()} documents.")
+    print(f"Conectado a la colección '{COLLECTION_NAME}' con {collection.count()} documentos.")
 except Exception as e:
-    print(f"Error connecting to ChromaDB: {e}")
+    print(f"Error conectando a ChromaDB: {e}")
     exit(1)
 
-# Function to generate embeddings
+# Función para generar embeddings
 def get_embeddings(sequences):
     sequences = [s.replace('\n', '').strip() for s in sequences]
     inputs = tokenizer(sequences, return_tensors="pt", padding=True, truncation=True, max_length=MAX_LEN)
@@ -52,44 +52,44 @@ def get_embeddings(sequences):
     embeddings = outputs[0][:, 0, :].cpu().numpy()
     return embeddings
 
-# Re-load Test Data (Same logic as test_search.py)
-print(f"Reloading dataset to reconstruct test split...")
+# Recargar Datos de Prueba (Misma lógica que test_search.py)
+print(f"Recargando conjunto de datos para reconstruir la división de prueba...")
 if not os.path.exists(CSV_PATH):
-    print(f"File not found: {CSV_PATH}")
+    print(f"Archivo no encontrado: {CSV_PATH}")
     exit(1)
 
 chunks = []
 read_chunk_size = 50000 
 try:
-    for chunk in tqdm(pd.read_csv(CSV_PATH, chunksize=read_chunk_size), desc="Reading and sampling"):
+    for chunk in tqdm(pd.read_csv(CSV_PATH, chunksize=read_chunk_size), desc="Leyendo y muestreando"):
         sampled_chunk = chunk.sample(frac=0.1, random_state=42)
         chunks.append(sampled_chunk)
 except Exception as e:
-    print(f"Error reading CSV: {e}")
+    print(f"Error leyendo CSV: {e}")
     exit(1)
 
 df_sample = pd.concat(chunks)
 train_df, test_df = train_test_split(df_sample, test_size=0.2, random_state=42)
-print(f"Total Test set size: {len(test_df)}")
+print(f"Tamaño total del conjunto de prueba: {len(test_df)}")
 
-# Iterative Search Logic
+# Lógica de Búsqueda Iterativa
 def iterative_search(sequence, collection, k=K_NEIGHBORS):
-    # Generate embedding
+    # Generar embedding
     embedding = get_embeddings([sequence])[0].tolist()
     
     current_filter = {"split": "train"}
     predicted_taxonomy = {}
     
-    print(f"\n--- Starting Iterative Search ---")
+    print(f"\n--- Iniciando Búsqueda Iterativa ---")
     
     for level in HIERARCHY:
-        # Construct ChromaDB where clause
+        # Construir cláusula where de ChromaDB
         if len(current_filter) > 1:
             where_clause = {"$and": [{k: v} for k, v in current_filter.items()]}
         else:
             where_clause = current_filter
 
-        # Query ChromaDB with current filter
+        # Consultar ChromaDB con filtro actual
         results = collection.query(
             query_embeddings=[embedding],
             n_results=k,
@@ -97,47 +97,47 @@ def iterative_search(sequence, collection, k=K_NEIGHBORS):
         )
         
         if not results['metadatas'] or not results['metadatas'][0]:
-            print(f"No results found at level {level}. Stopping.")
+            print(f"No se encontraron resultados en el nivel {level}. Deteniendo.")
             break
             
         metadatas = results['metadatas'][0]
         
-        # Extract values for the current level
+        # Extraer valores para el nivel actual
         values = [m.get(level, "Unknown") for m in metadatas]
         
-        # Count occurrences
+        # Contar ocurrencias
         counts = Counter(values)
         most_common_val, count = counts.most_common(1)[0]
         confidence = count / len(values)
         
-        print(f"Level: {level}, Top value: {most_common_val}, Confidence: {confidence:.2f} ({count}/{len(values)})")
+        print(f"Nivel: {level}, Valor superior: {most_common_val}, Confianza: {confidence:.2f} ({count}/{len(values)})")
         
-        # Update filter and prediction regardless of confidence
+        # Actualizar filtro y predicción independientemente de la confianza
         if most_common_val != "Unknown":
             current_filter[level] = most_common_val
             predicted_taxonomy[level] = {
                 "value": most_common_val,
                 "confidence": confidence
             }
-            print(f"-> Locking {level} = {most_common_val} (Confidence: {confidence:.2f})")
+            print(f"-> Bloqueando {level} = {most_common_val} (Confianza: {confidence:.2f})")
         else:
-            print(f"-> Unknown value. Cannot refine further.")
+            print(f"-> Valor desconocido. No se puede refinar más.")
             break
             
-    # Calculate overall confidence score
-    # Weighted average where higher levels (Kingdom) have more weight? 
-    # Or just a product of confidences? 
-    # The user asked for "taking into account the decreasing importance of each step in the hierarchy"
-    # This implies Kingdom is MORE important than Species, or vice versa?
-    # Usually, getting Kingdom right is "easier" and less specific. Getting Species right is hard.
-    # If we want a single score, maybe a weighted sum of confidences?
-    # Let's implement a simple weighted score where Kingdom has weight 1, Phylum 1, etc.
-    # Or maybe decreasing weights? "decreasing importance of each step" -> Kingdom is most important?
-    # Let's assume Kingdom (index 0) is most important, Species (index 6) is least important for the "base" classification,
-    # BUT usually in taxonomy, specific identification is the goal.
-    # However, the prompt says "decreasing importance of each step". 
-    # Let's interpret "decreasing importance" as: Kingdom (high weight) -> Species (low weight).
-    # Weights: Kingdom=7, Phylum=6, ..., Species=1.
+    # Calcular puntaje de confianza general
+    # ¿Promedio ponderado donde los niveles superiores (Reino) tienen más peso?
+    # ¿O solo un producto de confianzas?
+    # El usuario pidió "teniendo en cuenta la importancia decreciente de cada paso en la jerarquía"
+    # ¿Esto implica que Reino es MÁS importante que Especie, o viceversa?
+    # Usualmente, obtener el Reino correcto es "más fácil" y menos específico. Obtener la Especie correcta es difícil.
+    # Si queremos un puntaje único, ¿quizás una suma ponderada de confianzas?
+    # Implementemos un puntaje ponderado simple donde Reino tiene peso 1, Filo 1, etc.
+    # ¿O quizás pesos decrecientes? "importancia decreciente de cada paso" -> ¿Reino es más importante?
+    # Asumamos que Reino (índice 0) es más importante, Especie (índice 6) es menos importante para la clasificación "base",
+    # PERO usualmente en taxonomía, la identificación específica es el objetivo.
+    # Sin embargo, el prompt dice "importancia decreciente de cada paso".
+    # Interpretemos "importancia decreciente" como: Reino (peso alto) -> Especie (peso bajo).
+    # Pesos: Reino=7, Filo=6, ..., Especie=1.
     
     total_weight = 0
     weighted_confidence_sum = 0
@@ -156,24 +156,24 @@ def iterative_search(sequence, collection, k=K_NEIGHBORS):
     
     return predicted_taxonomy, overall_confidence
 
-# Run on a few samples
-print(f"Running iterative search on {TEST_SAMPLE_SIZE} samples...")
+# Ejecutar en algunas muestras
+print(f"Ejecutando búsqueda iterativa en {TEST_SAMPLE_SIZE} muestras...")
 test_subset = test_df.head(TEST_SAMPLE_SIZE)
 
 for idx, row in test_subset.iterrows():
-    print(f"\nQuery Sequence ID: {row.name}") # Assuming index is meaningful or just use row index
+    print(f"\nID de Secuencia de Consulta: {row.name}") # Asumiendo que el índice es significativo o solo usar índice de fila
     true_tax = {level: row[level] for level in HIERARCHY}
-    print(f"True Taxonomy: {true_tax}")
+    print(f"Taxonomía Verdadera: {true_tax}")
     
     prediction, overall_score = iterative_search(str(row['Sequence']), collection)
     
-    print(f"Final Prediction: {prediction}")
-    print(f"Overall Weighted Confidence: {overall_score:.4f}")
+    print(f"Predicción Final: {prediction}")
+    print(f"Confianza Ponderada General: {overall_score:.4f}")
     
-    # Check correctness
+    # Verificar corrección
     correct_levels = 0
     for level, data in prediction.items():
         if str(true_tax.get(level)) == data['value']:
             correct_levels += 1
-    print(f"Correct Levels: {correct_levels}/{len(prediction)} (of predicted)")
+    print(f"Niveles Correctos: {correct_levels}/{len(prediction)} (de predichos)")
 
