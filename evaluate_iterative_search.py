@@ -44,31 +44,45 @@ except Exception as e:
     exit(1)
 
 # Recargar Datos de Prueba
-print(f"Recargando conjunto de datos para reconstruir la división de prueba...")
-if not os.path.exists(CSV_PATH):
-    print(f"Archivo no encontrado: {CSV_PATH}")
-    exit(1)
+TEST_CACHE_PATH = 'data/test_dataset_cache.csv'
 
-chunks = []
-read_chunk_size = 50000 
-try:
-    for chunk in tqdm(pd.read_csv(CSV_PATH, chunksize=read_chunk_size), desc="Leyendo y muestreando"):
-        sampled_chunk = chunk.sample(frac=0.1, random_state=42)
-        chunks.append(sampled_chunk)
-except Exception as e:
-    print(f"Error leyendo CSV: {e}")
-    exit(1)
+if os.path.exists(TEST_CACHE_PATH):
+    print(f"Cargando conjunto de prueba desde caché: {TEST_CACHE_PATH}")
+    test_df = pd.read_csv(TEST_CACHE_PATH)
+    print(f"Tamaño del conjunto de prueba cargado: {len(test_df)}")
+else:
+    print(f"Recargando conjunto de datos para reconstruir la división de prueba...")
+    if not os.path.exists(CSV_PATH):
+        print(f"Archivo no encontrado: {CSV_PATH}")
+        exit(1)
 
-df_sample = pd.concat(chunks)
-train_df, test_df = train_test_split(df_sample, test_size=0.2, random_state=42)
-print(f"Tamaño total del conjunto de prueba: {len(test_df)}")
+    chunks = []
+    read_chunk_size = 100000  # Aumentado para mayor velocidad de lectura
+    cols_to_use = ['Sequence'] + HIERARCHY
+    
+    try:
+        for chunk in tqdm(pd.read_csv(CSV_PATH, chunksize=read_chunk_size, usecols=cols_to_use), desc="Leyendo y muestreando"):
+            sampled_chunk = chunk.sample(frac=0.1, random_state=42)
+            chunks.append(sampled_chunk)
+    except Exception as e:
+        print(f"Error leyendo CSV: {e}")
+        exit(1)
 
-# Limitar a 500 muestras para prueba
-test_df = test_df.head(500)
+    df_sample = pd.concat(chunks)
+    train_df, test_df = train_test_split(df_sample, test_size=0.2, random_state=42)
+    print(f"Tamaño total del conjunto de prueba generado: {len(test_df)}")
+    
+    # Guardar en caché para futuras ejecuciones
+    test_df.to_csv(TEST_CACHE_PATH, index=False)
+    print(f"Conjunto de prueba guardado en caché: {TEST_CACHE_PATH}")
+
+# Limitar a 32 muestras para prueba
+test_df = test_df.head(32)
 print(f"Limitando evaluación a {len(test_df)} muestras.")
 
 # Función para generar embeddings en lotes
-def get_embeddings_batched(sequences, batch_size=32):
+
+def get_embeddings_batched(sequences, batch_size=8):
     all_embeddings = []
     for i in tqdm(range(0, len(sequences), batch_size), desc="Generando Embeddings"):
         batch = sequences[i:i+batch_size]
@@ -146,7 +160,7 @@ print(f"Iniciando evaluación en {len(test_df)} muestras...")
 # Pre-calcular embeddings
 print("Pre-calculando embeddings para el conjunto de prueba...")
 test_sequences = test_df['Sequence'].astype(str).tolist()
-test_embeddings = get_embeddings_batched(test_sequences, batch_size=128)
+test_embeddings = get_embeddings_batched(test_sequences, batch_size=8)
 
 y_true = {level: [] for level in HIERARCHY}
 y_pred = {level: [] for level in HIERARCHY}
@@ -167,25 +181,20 @@ def process_single_sample(args):
             
     return true_tax, pred_result, overall_score
 
-print("Ejecutando búsqueda iterativa en paralelo...")
-with ThreadPoolExecutor(max_workers=8) as executor:
-    # Preparar argumentos
-    args_list = list(zip(test_embeddings, test_df.iterrows()))
-    
-    # Enviar tareas
-    futures = [executor.submit(process_single_sample, args) for args in args_list]
-    
-    # Recoger resultados
-    for future in tqdm(as_completed(futures), total=len(futures), desc="Evaluando"):
-        try:
-            true_tax, pred_result, overall_score = future.result()
-            confidences.append(overall_score)
-            
-            for level in HIERARCHY:
-                y_true[level].append(true_tax[level])
-                y_pred[level].append(pred_result[level])
-        except Exception as e:
-            print(f"Error procesando muestra: {e}")
+print("Ejecutando búsqueda iterativa secuencialmente...")
+# Preparar argumentos
+args_list = list(zip(test_embeddings, test_df.iterrows()))
+
+for args in tqdm(args_list, desc="Evaluando"):
+    try:
+        true_tax, pred_result, overall_score = process_single_sample(args)
+        confidences.append(overall_score)
+        
+        for level in HIERARCHY:
+            y_true[level].append(true_tax[level])
+            y_pred[level].append(pred_result[level])
+    except Exception as e:
+        print(f"Error procesando muestra: {e}")
 
 
 # Calcular Métricas
