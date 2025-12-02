@@ -8,6 +8,7 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from collections import Counter
 from sklearn.metrics import accuracy_score, recall_score, f1_score, precision_score
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Configuración
 CSV_PATH = 'data/final_dataset.csv'
@@ -62,8 +63,8 @@ df_sample = pd.concat(chunks)
 train_df, test_df = train_test_split(df_sample, test_size=0.2, random_state=42)
 print(f"Tamaño total del conjunto de prueba: {len(test_df)}")
 
-# Limitar a 300 muestras para prueba
-test_df = test_df.head(300)
+# Limitar a 500 muestras para prueba
+test_df = test_df.head(500)
 print(f"Limitando evaluación a {len(test_df)} muestras.")
 
 # Función para generar embeddings en lotes
@@ -145,25 +146,46 @@ print(f"Iniciando evaluación en {len(test_df)} muestras...")
 # Pre-calcular embeddings
 print("Pre-calculando embeddings para el conjunto de prueba...")
 test_sequences = test_df['Sequence'].astype(str).tolist()
-test_embeddings = get_embeddings_batched(test_sequences, batch_size=64)
+test_embeddings = get_embeddings_batched(test_sequences, batch_size=128)
 
 y_true = {level: [] for level in HIERARCHY}
 y_pred = {level: [] for level in HIERARCHY}
 confidences = []
 
-print("Ejecutando búsqueda iterativa...")
-for idx, (embedding, (_, row)) in tqdm(enumerate(zip(test_embeddings, test_df.iterrows())), total=len(test_df), desc="Evaluando"):
+def process_single_sample(args):
+    embedding, (_, row) = args
     true_tax = {level: str(row[level]) if pd.notna(row[level]) else "Unknown" for level in HIERARCHY}
     
     prediction, overall_score = iterative_search_from_embedding(embedding, collection)
-    confidences.append(overall_score)
     
+    pred_result = {}
     for level in HIERARCHY:
-        y_true[level].append(true_tax[level])
         if level in prediction:
-            y_pred[level].append(prediction[level]['value'])
+            pred_result[level] = prediction[level]['value']
         else:
-            y_pred[level].append("Unpredicted")
+            pred_result[level] = "Unpredicted"
+            
+    return true_tax, pred_result, overall_score
+
+print("Ejecutando búsqueda iterativa en paralelo...")
+with ThreadPoolExecutor(max_workers=8) as executor:
+    # Preparar argumentos
+    args_list = list(zip(test_embeddings, test_df.iterrows()))
+    
+    # Enviar tareas
+    futures = [executor.submit(process_single_sample, args) for args in args_list]
+    
+    # Recoger resultados
+    for future in tqdm(as_completed(futures), total=len(futures), desc="Evaluando"):
+        try:
+            true_tax, pred_result, overall_score = future.result()
+            confidences.append(overall_score)
+            
+            for level in HIERARCHY:
+                y_true[level].append(true_tax[level])
+                y_pred[level].append(pred_result[level])
+        except Exception as e:
+            print(f"Error procesando muestra: {e}")
 
 
 # Calcular Métricas

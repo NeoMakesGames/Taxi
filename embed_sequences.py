@@ -67,14 +67,14 @@ if not os.path.exists(CSV_PATH):
     print(f"Archivo no encontrado: {CSV_PATH}")
     exit(1)
 
-# 1. Cargar y Muestrear 10%
-print("Muestreando 10% del conjunto de datos...")
+# 1. Cargar y Muestrear 33%
+print("Muestreando 33% del conjunto de datos...")
 chunks = []
 # Usar un tamaño de fragmento más grande para lectura para acelerar E/S, muestrearemos inmediatamente
 read_chunk_size = 50000 
 try:
     for chunk in tqdm(pd.read_csv(CSV_PATH, chunksize=read_chunk_size), desc="Leyendo y muestreando"):
-        sampled_chunk = chunk.sample(frac=0.1, random_state=42)
+        sampled_chunk = chunk.sample(frac=0.33, random_state=42)
         chunks.append(sampled_chunk)
 except Exception as e:
     print(f"Error leyendo CSV: {e}")
@@ -89,8 +89,9 @@ train_df, test_df = train_test_split(df_sample, test_size=0.2, random_state=42)
 train_df['split'] = 'train'
 test_df['split'] = 'test'
 
-# Recombinar para procesar de una vez
-processing_df = pd.concat([train_df, test_df])
+# Solo procesar train
+processing_df = train_df
+print(f"Procesando solo conjunto de entrenamiento ({len(processing_df)} secuencias). Test set ignorado.")
 
 # 3. Procesar en lotes
 total_rows = len(processing_df)
