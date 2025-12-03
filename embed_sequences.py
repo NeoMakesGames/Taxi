@@ -4,12 +4,11 @@ from transformers import AutoTokenizer, AutoModel
 import chromadb
 from tqdm import tqdm
 import os
-import numpy as np
 from sklearn.model_selection import train_test_split
 
 # Configuración
 CSV_PATH = 'data/final_dataset.csv'
-MODEL_NAME = 'quietflamingo/dnabert2-no-flashattention'
+MODEL_NAME = 'zhihan1996/DNABERT-2-117M'
 CHROMA_DB_PATH = 'chroma_db'
 COLLECTION_NAME = 'dna_sequences'
 BATCH_SIZE = 16  # Tamaño de lote conservador para evitar OOM
@@ -67,14 +66,14 @@ if not os.path.exists(CSV_PATH):
     print(f"Archivo no encontrado: {CSV_PATH}")
     exit(1)
 
-# 1. Cargar y Muestrear 33%
-print("Muestreando 33% del conjunto de datos...")
+# 1. Cargar y Muestrear 100%
+print("Muestreando 100% del conjunto de datos...")
 chunks = []
 # Usar un tamaño de fragmento más grande para lectura para acelerar E/S, muestrearemos inmediatamente
 read_chunk_size = 50000 
 try:
     for chunk in tqdm(pd.read_csv(CSV_PATH, chunksize=read_chunk_size), desc="Leyendo y muestreando"):
-        sampled_chunk = chunk.sample(frac=0.33, random_state=42)
+        sampled_chunk = chunk.sample(frac=1.0, random_state=42)
         chunks.append(sampled_chunk)
 except Exception as e:
     print(f"Error leyendo CSV: {e}")

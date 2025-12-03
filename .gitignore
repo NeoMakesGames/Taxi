@@ -1,1 +1,3 @@
-chroma_db/chroma.sqlite3
+chroma_db/
+*.bin
+*.sqlite3

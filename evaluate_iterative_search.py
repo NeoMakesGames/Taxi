@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Configuración
 CSV_PATH = 'data/final_dataset.csv'
-MODEL_NAME = 'quietflamingo/dnabert2-no-flashattention'
+MODEL_NAME = 'zhihan1996/DNABERT-2-117M'
 CHROMA_DB_PATH = 'chroma_db'
 COLLECTION_NAME = 'dna_sequences'
 MAX_LEN = 256 
@@ -46,7 +46,20 @@ except Exception as e:
 # Recargar Datos de Prueba
 TEST_CACHE_PATH = 'data/test_dataset_cache.csv'
 
+use_cache = False
 if os.path.exists(TEST_CACHE_PATH):
+    if os.path.exists(CSV_PATH):
+        csv_mtime = os.path.getmtime(CSV_PATH)
+        cache_mtime = os.path.getmtime(TEST_CACHE_PATH)
+        if cache_mtime > csv_mtime:
+            use_cache = True
+            print(f"Caché es válido (más reciente que CSV).")
+        else:
+            print("Caché desactualizado (CSV es más reciente). Recargando...")
+    else:
+        use_cache = True
+
+if use_cache:
     print(f"Cargando conjunto de prueba desde caché: {TEST_CACHE_PATH}")
     test_df = pd.read_csv(TEST_CACHE_PATH)
     print(f"Tamaño del conjunto de prueba cargado: {len(test_df)}")
@@ -57,12 +70,12 @@ else:
         exit(1)
 
     chunks = []
-    read_chunk_size = 100000  # Aumentado para mayor velocidad de lectura
+    read_chunk_size = 50000  # Igualar a embed_sequences.py para consistencia
     cols_to_use = ['Sequence'] + HIERARCHY
     
     try:
         for chunk in tqdm(pd.read_csv(CSV_PATH, chunksize=read_chunk_size, usecols=cols_to_use), desc="Leyendo y muestreando"):
-            sampled_chunk = chunk.sample(frac=0.1, random_state=42)
+            sampled_chunk = chunk.sample(frac=1.0, random_state=42) # Igualar a embed_sequences.py (100%)
             chunks.append(sampled_chunk)
     except Exception as e:
         print(f"Error leyendo CSV: {e}")
@@ -97,25 +110,31 @@ def get_embeddings_batched(sequences, batch_size=8):
 
 # Lógica de Búsqueda Iterativa (Optimizada)
 def iterative_search_from_embedding(embedding, collection, k=K_NEIGHBORS):
-    current_filter = {"split": "train"}
+    print("DEBUG: Starting iterative search for a sample")
+    current_filter = {} # Removed "split": "train" as DB only contains train data
     predicted_taxonomy = {}
     
     for level in HIERARCHY:
         # Construir cláusula where de ChromaDB
-        if len(current_filter) > 1:
-            where_clause = {"$and": [{k: v} for k, v in current_filter.items()]}
-        else:
-            where_clause = current_filter
+        where_clause = None
+        if current_filter:
+            if len(current_filter) > 1:
+                where_clause = {"$and": [{k: v} for k, v in current_filter.items()]}
+            else:
+                where_clause = current_filter
 
         # Consultar ChromaDB con filtro actual
         try:
+            print(f"DEBUG: Querying level {level} with filter {where_clause}")
             results = collection.query(
                 query_embeddings=[embedding.tolist()],
                 n_results=k,
                 where=where_clause,
                 include=['metadatas'] # Optimización: Solo obtener metadatos
             )
+            print(f"DEBUG: Query returned for {level}")
         except Exception as e:
+            print(f"Error querying ChromaDB at level {level}: {e}")
             break
         
         if not results['metadatas'] or not results['metadatas'][0]:
@@ -162,6 +181,14 @@ print("Pre-calculando embeddings para el conjunto de prueba...")
 test_sequences = test_df['Sequence'].astype(str).tolist()
 test_embeddings = get_embeddings_batched(test_sequences, batch_size=8)
 
+if np.isnan(test_embeddings).any():
+    print("ERROR: Embeddings contain NaNs!")
+    exit(1)
+if np.isinf(test_embeddings).any():
+    print("ERROR: Embeddings contain Infs!")
+    exit(1)
+print(f"Embeddings shape: {test_embeddings.shape}")
+
 y_true = {level: [] for level in HIERARCHY}
 y_pred = {level: [] for level in HIERARCHY}
 confidences = []
@@ -185,10 +212,12 @@ print("Ejecutando búsqueda iterativa secuencialmente...")
 # Preparar argumentos
 args_list = list(zip(test_embeddings, test_df.iterrows()))
 
-for args in tqdm(args_list, desc="Evaluando"):
+for i, args in enumerate(tqdm(args_list, desc="Evaluando")):
     try:
         true_tax, pred_result, overall_score = process_single_sample(args)
         confidences.append(overall_score)
+        
+        print(f"Sample {i+1}/{len(args_list)} processed. Confidence: {overall_score:.4f}")
         
         for level in HIERARCHY:
             y_true[level].append(true_tax[level])
