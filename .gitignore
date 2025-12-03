@@ -1,3 +1,4 @@
 chroma_db/
 *.bin
 *.sqlite3
+data/test_dataset_cache.csv
