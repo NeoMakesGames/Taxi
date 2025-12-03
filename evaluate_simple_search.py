@@ -18,7 +18,7 @@ MODEL_NAME = 'zhihan1996/DNABERT-2-117M'
 CHROMA_DB_PATH = 'chroma_db'
 COLLECTION_NAME = 'dna_sequences'
 MAX_LEN = 256
-K_NEIGHBORS = 5 
+K_NEIGHBORS = 1
 HIERARCHY = ['Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species']
 
 # Inicializar Dispositivo
@@ -118,26 +118,29 @@ def simple_search_from_embedding(embedding, collection, k=K_NEIGHBORS):
         )
     except Exception as e:
         print(f"Error querying ChromaDB: {e}")
-        return {}
+        return {}, {}
     
     if not results['metadatas'] or not results['metadatas'][0]:
-        return {}
+        return {}, {}
         
     metadatas = results['metadatas'][0]
     predicted_taxonomy = {}
+    confidences = {}
     
     # Votación mayoritaria para cada nivel
     for level in HIERARCHY:
         values = [m.get(level, "Unknown") for m in metadatas]
         if not values:
             predicted_taxonomy[level] = "Unknown"
+            confidences[level] = 0.0
             continue
             
         counts = Counter(values)
         most_common_val, count = counts.most_common(1)[0]
         predicted_taxonomy[level] = most_common_val
+        confidences[level] = count / len(values)
         
-    return predicted_taxonomy
+    return predicted_taxonomy, confidences
 
 # Bucle de Evaluación
 print(f"Iniciando evaluación simple en {len(test_df)} muestras...")
@@ -149,16 +152,18 @@ test_embeddings = get_embeddings_batched(test_sequences, batch_size=8)
 
 y_true = {level: [] for level in HIERARCHY}
 y_pred = {level: [] for level in HIERARCHY}
+y_conf = {level: [] for level in HIERARCHY}
 
 print("Ejecutando búsqueda simple...")
 for i, (embedding, (_, row)) in enumerate(zip(test_embeddings, test_df.iterrows())):
     true_tax = {level: str(row[level]) if pd.notna(row[level]) else "Unknown" for level in HIERARCHY}
     
-    prediction = simple_search_from_embedding(embedding, collection)
+    prediction, confidences = simple_search_from_embedding(embedding, collection)
     
     for level in HIERARCHY:
         y_true[level].append(true_tax[level])
         y_pred[level].append(prediction.get(level, "Unpredicted"))
+        y_conf[level].append(confidences.get(level, 0.0))
 
 # Calcular Métricas
 print("\n--- Resultados de Evaluación Simple ---")
@@ -169,17 +174,24 @@ for level in HIERARCHY:
     prec = precision_score(y_true[level], y_pred[level], average='weighted', zero_division=0)
     rec = recall_score(y_true[level], y_pred[level], average='weighted', zero_division=0)
     f1 = f1_score(y_true[level], y_pred[level], average='weighted', zero_division=0)
+    avg_conf = np.mean(y_conf[level])
     
     metrics.append({
         "Level": level,
         "Accuracy": acc,
         "Precision": prec,
         "Recall": rec,
-        "F1-Score": f1
+        "F1-Score": f1,
+        "Avg Confidence": avg_conf
     })
 
 df_metrics = pd.DataFrame(metrics)
 print(df_metrics.to_string(index=False))
+
+# Calculate overall confidence
+all_confidences = [c for level_confs in y_conf.values() for c in level_confs]
+overall_confidence = np.mean(all_confidences)
+print(f"\nConfianza General (Promedio de todos los niveles y muestras): {overall_confidence:.4f}")
 
 # Guardar resultados en CSV
 df_metrics.to_csv("simple_search_results.csv", index=False)
