@@ -89,10 +89,6 @@ else:
     test_df.to_csv(TEST_CACHE_PATH, index=False)
     print(f"Conjunto de prueba guardado en caché: {TEST_CACHE_PATH}")
 
-# Limitar a 300 muestras para prueba
-test_df = test_df.head(300)
-print(f"Limitando evaluación a {len(test_df)} muestras.")
-
 # Función para generar embeddings en lotes
 def get_embeddings_batched(sequences, batch_size=8):
     all_embeddings = []
@@ -108,45 +104,54 @@ def get_embeddings_batched(sequences, batch_size=8):
     return np.vstack(all_embeddings)
 
 # Lógica de Búsqueda Simple (k-NN)
-def simple_search_batched(embeddings, client, k=K_NEIGHBORS):
-    try:
-        results = client.search(
-            collection_name=COLLECTION_NAME,
-            data=embeddings,
-            limit=k,
-            output_fields=HIERARCHY
-        )
-    except Exception as e:
-        print(f"Error querying Milvus: {e}")
-        return [], []
-    
+def simple_search_batched(embeddings, client, k=K_NEIGHBORS, batch_size=100):
     all_predictions = []
     all_confidences = []
-
-    for hits in results:
-        predicted_taxonomy = {}
-        confidences = {}
+    
+    total_samples = len(embeddings)
+    
+    for i in tqdm(range(0, total_samples, batch_size), desc="Buscando en Milvus"):
+        batch_embeddings = embeddings[i:i+batch_size]
         
-        if not hits:
-            all_predictions.append({level: "Unknown" for level in HIERARCHY})
-            all_confidences.append({level: 0.0 for level in HIERARCHY})
+        try:
+            results = client.search(
+                collection_name=COLLECTION_NAME,
+                data=batch_embeddings,
+                limit=k,
+                output_fields=HIERARCHY
+            )
+        except Exception as e:
+            print(f"Error querying Milvus: {e}")
+            # Append empty results for this batch to maintain alignment
+            for _ in range(len(batch_embeddings)):
+                all_predictions.append({level: "Unknown" for level in HIERARCHY})
+                all_confidences.append({level: 0.0 for level in HIERARCHY})
             continue
 
-        # Votación mayoritaria para cada nivel
-        for level in HIERARCHY:
-            values = [hit['entity'].get(level, "Unknown") for hit in hits]
-            if not values:
-                predicted_taxonomy[level] = "Unknown"
-                confidences[level] = 0.0
+        for hits in results:
+            predicted_taxonomy = {}
+            confidences = {}
+            
+            if not hits:
+                all_predictions.append({level: "Unknown" for level in HIERARCHY})
+                all_confidences.append({level: 0.0 for level in HIERARCHY})
                 continue
-                
-            counts = Counter(values)
-            most_common_val, count = counts.most_common(1)[0]
-            predicted_taxonomy[level] = most_common_val
-            confidences[level] = count / len(values)
-        
-        all_predictions.append(predicted_taxonomy)
-        all_confidences.append(confidences)
+
+            # Votación mayoritaria para cada nivel
+            for level in HIERARCHY:
+                values = [hit['entity'].get(level, "Unknown") for hit in hits]
+                if not values:
+                    predicted_taxonomy[level] = "Unknown"
+                    confidences[level] = 0.0
+                    continue
+                    
+                counts = Counter(values)
+                most_common_val, count = counts.most_common(1)[0]
+                predicted_taxonomy[level] = most_common_val
+                confidences[level] = count / len(values)
+            
+            all_predictions.append(predicted_taxonomy)
+            all_confidences.append(confidences)
         
     return all_predictions, all_confidences
 
@@ -156,7 +161,7 @@ print(f"Iniciando evaluación simple en {len(test_df)} muestras...")
 # Pre-calcular embeddings
 print("Pre-calculando embeddings para el conjunto de prueba...")
 test_sequences = test_df['Sequence'].astype(str).tolist()
-test_embeddings = get_embeddings_batched(test_sequences, batch_size=8)
+test_embeddings = get_embeddings_batched(test_sequences, batch_size=128)
 
 y_true = {level: [] for level in HIERARCHY}
 y_pred = {level: [] for level in HIERARCHY}
