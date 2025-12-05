@@ -1,7 +1,7 @@
 import pandas as pd
 import torch
 from transformers import AutoTokenizer, AutoModel
-import chromadb
+from pymilvus import MilvusClient
 from tqdm import tqdm
 import os
 import numpy as np
@@ -11,7 +11,7 @@ from collections import Counter
 # Configuración
 CSV_PATH = 'data/final_dataset.csv'
 MODEL_NAME = 'quietflamingo/dnabert2-no-flashattention'
-CHROMA_DB_PATH = 'chroma_db'
+MILVUS_DB_PATH = 'milvus_db/milvus.db'
 COLLECTION_NAME = 'dna_sequences'
 MAX_LEN = 256 
 K_NEIGHBORS = 10 # El usuario mencionó "top 10"
@@ -32,14 +32,13 @@ except Exception as e:
     print(f"Error cargando el modelo: {e}")
     exit(1)
 
-# Inicializar ChromaDB
-print("Conectando a ChromaDB...")
+# Inicializar Milvus
+print("Conectando a Milvus...")
 try:
-    client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
-    collection = client.get_collection(name=COLLECTION_NAME)
-    print(f"Conectado a la colección '{COLLECTION_NAME}' con {collection.count()} documentos.")
+    client = MilvusClient(uri=MILVUS_DB_PATH)
+    print(f"Conectado a Milvus.")
 except Exception as e:
-    print(f"Error conectando a ChromaDB: {e}")
+    print(f"Error conectando a Milvus: {e}")
     exit(1)
 
 # Función para generar embeddings
@@ -73,37 +72,50 @@ train_df, test_df = train_test_split(df_sample, test_size=0.2, random_state=42)
 print(f"Tamaño total del conjunto de prueba: {len(test_df)}")
 
 # Lógica de Búsqueda Iterativa
-def iterative_search(sequence, collection, k=K_NEIGHBORS):
+def iterative_search(sequence, client, k=K_NEIGHBORS):
     # Generar embedding
     embedding = get_embeddings([sequence])[0].tolist()
     
-    current_filter = {"split": "train"}
+    current_filter = {}
     predicted_taxonomy = {}
     
     print(f"\n--- Iniciando Búsqueda Iterativa ---")
     
-    for level in HIERARCHY:
-        # Construir cláusula where de ChromaDB
-        if len(current_filter) > 1:
-            where_clause = {"$and": [{k: v} for k, v in current_filter.items()]}
-        else:
-            where_clause = current_filter
+    # Dynamic K: Start at K_NEIGHBORS and decay to 1
+    k_values = np.linspace(k, 1, len(HIERARCHY))
+    k_values = [int(round(x)) for x in k_values]
+    k_values = [max(1, x) for x in k_values]
 
-        # Consultar ChromaDB con filtro actual
-        results = collection.query(
-            query_embeddings=[embedding],
-            n_results=k,
-            where=where_clause
-        )
+    for i, level in enumerate(HIERARCHY):
+        current_k = k_values[i]
+
+        # Construir filtro de Milvus
+        filter_expr = ""
+        if current_filter:
+            conditions = [f'{key} == "{value}"' for key, value in current_filter.items()]
+            filter_expr = " and ".join(conditions)
+
+        # Consultar Milvus con filtro actual
+        try:
+            results = client.search(
+                collection_name=COLLECTION_NAME,
+                data=[embedding],
+                limit=current_k,
+                filter=filter_expr,
+                output_fields=[level]
+            )
+        except Exception as e:
+            print(f"Error querying Milvus at level {level}: {e}")
+            break
         
-        if not results['metadatas'] or not results['metadatas'][0]:
+        if not results or not results[0]:
             print(f"No se encontraron resultados en el nivel {level}. Deteniendo.")
             break
             
-        metadatas = results['metadatas'][0]
+        hits = results[0]
         
         # Extraer valores para el nivel actual
-        values = [m.get(level, "Unknown") for m in metadatas]
+        values = [hit['entity'].get(level, "Unknown") for hit in hits]
         
         # Contar ocurrencias
         counts = Counter(values)
@@ -125,20 +137,6 @@ def iterative_search(sequence, collection, k=K_NEIGHBORS):
             break
             
     # Calcular puntaje de confianza general
-    # ¿Promedio ponderado donde los niveles superiores (Reino) tienen más peso?
-    # ¿O solo un producto de confianzas?
-    # El usuario pidió "teniendo en cuenta la importancia decreciente de cada paso en la jerarquía"
-    # ¿Esto implica que Reino es MÁS importante que Especie, o viceversa?
-    # Usualmente, obtener el Reino correcto es "más fácil" y menos específico. Obtener la Especie correcta es difícil.
-    # Si queremos un puntaje único, ¿quizás una suma ponderada de confianzas?
-    # Implementemos un puntaje ponderado simple donde Reino tiene peso 1, Filo 1, etc.
-    # ¿O quizás pesos decrecientes? "importancia decreciente de cada paso" -> ¿Reino es más importante?
-    # Asumamos que Reino (índice 0) es más importante, Especie (índice 6) es menos importante para la clasificación "base",
-    # PERO usualmente en taxonomía, la identificación específica es el objetivo.
-    # Sin embargo, el prompt dice "importancia decreciente de cada paso".
-    # Interpretemos "importancia decreciente" como: Reino (peso alto) -> Especie (peso bajo).
-    # Pesos: Reino=7, Filo=6, ..., Especie=1.
-    
     total_weight = 0
     weighted_confidence_sum = 0
     
@@ -165,7 +163,7 @@ for idx, row in test_subset.iterrows():
     true_tax = {level: row[level] for level in HIERARCHY}
     print(f"Taxonomía Verdadera: {true_tax}")
     
-    prediction, overall_score = iterative_search(str(row['Sequence']), collection)
+    prediction, overall_score = iterative_search(str(row['Sequence']), client)
     
     print(f"Predicción Final: {prediction}")
     print(f"Confianza Ponderada General: {overall_score:.4f}")

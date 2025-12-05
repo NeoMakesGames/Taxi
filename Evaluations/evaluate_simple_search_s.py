@@ -4,7 +4,7 @@ warnings.filterwarnings('ignore')
 import pandas as pd
 import torch
 from transformers import AutoTokenizer, AutoModel
-import chromadb
+from pymilvus import MilvusClient
 from tqdm import tqdm
 import os
 import numpy as np
@@ -15,7 +15,7 @@ from sklearn.metrics import accuracy_score, recall_score, f1_score, precision_sc
 # Configuración
 CSV_PATH = 'data/final_dataset.csv'
 MODEL_NAME = 'zhihan1996/DNABERT-S'
-CHROMA_DB_PATH = 'chroma_db'
+MILVUS_DB_PATH = 'milvus_db/milvus.db'
 COLLECTION_NAME = 'dna_sequences_s'
 MAX_LEN = 256
 K_NEIGHBORS = 1
@@ -35,14 +35,13 @@ except Exception as e:
     print(f"Error cargando el modelo: {e}")
     exit(1)
 
-# Inicializar ChromaDB
-print("Conectando a ChromaDB...")
+# Inicializar Milvus
+print("Conectando a Milvus...")
 try:
-    client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
-    collection = client.get_collection(name=COLLECTION_NAME)
-    print(f"Conectado a la colección '{COLLECTION_NAME}' con {collection.count()} documentos.")
+    client = MilvusClient(uri=MILVUS_DB_PATH)
+    print(f"Conectado a Milvus.")
 except Exception as e:
-    print(f"Error conectando a ChromaDB: {e}")
+    print(f"Error conectando a Milvus: {e}")
     exit(1)
 
 # Recargar Datos de Prueba
@@ -90,8 +89,8 @@ else:
     test_df.to_csv(TEST_CACHE_PATH, index=False)
     print(f"Conjunto de prueba guardado en caché: {TEST_CACHE_PATH}")
 
-# Limitar a 3000 muestras para prueba
-test_df = test_df.head(3000)
+# Limitar a 300 muestras para prueba
+test_df = test_df.head(300)
 print(f"Limitando evaluación a {len(test_df)} muestras.")
 
 # Función para generar embeddings en lotes
@@ -109,38 +108,47 @@ def get_embeddings_batched(sequences, batch_size=8):
     return np.vstack(all_embeddings)
 
 # Lógica de Búsqueda Simple (k-NN)
-def simple_search_from_embedding(embedding, collection, k=K_NEIGHBORS):
+def simple_search_batched(embeddings, client, k=K_NEIGHBORS):
     try:
-        results = collection.query(
-            query_embeddings=[embedding.tolist()],
-            n_results=k,
-            include=['metadatas']
+        results = client.search(
+            collection_name=COLLECTION_NAME,
+            data=embeddings,
+            limit=k,
+            output_fields=HIERARCHY
         )
     except Exception as e:
-        print(f"Error querying ChromaDB: {e}")
-        return {}, {}
+        print(f"Error querying Milvus: {e}")
+        return [], []
     
-    if not results['metadatas'] or not results['metadatas'][0]:
-        return {}, {}
+    all_predictions = []
+    all_confidences = []
+
+    for hits in results:
+        predicted_taxonomy = {}
+        confidences = {}
         
-    metadatas = results['metadatas'][0]
-    predicted_taxonomy = {}
-    confidences = {}
-    
-    # Votación mayoritaria para cada nivel
-    for level in HIERARCHY:
-        values = [m.get(level, "Unknown") for m in metadatas]
-        if not values:
-            predicted_taxonomy[level] = "Unknown"
-            confidences[level] = 0.0
+        if not hits:
+            all_predictions.append({level: "Unknown" for level in HIERARCHY})
+            all_confidences.append({level: 0.0 for level in HIERARCHY})
             continue
-            
-        counts = Counter(values)
-        most_common_val, count = counts.most_common(1)[0]
-        predicted_taxonomy[level] = most_common_val
-        confidences[level] = count / len(values)
+
+        # Votación mayoritaria para cada nivel
+        for level in HIERARCHY:
+            values = [hit['entity'].get(level, "Unknown") for hit in hits]
+            if not values:
+                predicted_taxonomy[level] = "Unknown"
+                confidences[level] = 0.0
+                continue
+                
+            counts = Counter(values)
+            most_common_val, count = counts.most_common(1)[0]
+            predicted_taxonomy[level] = most_common_val
+            confidences[level] = count / len(values)
         
-    return predicted_taxonomy, confidences
+        all_predictions.append(predicted_taxonomy)
+        all_confidences.append(confidences)
+        
+    return all_predictions, all_confidences
 
 # Bucle de Evaluación
 print(f"Iniciando evaluación simple en {len(test_df)} muestras...")
@@ -154,11 +162,11 @@ y_true = {level: [] for level in HIERARCHY}
 y_pred = {level: [] for level in HIERARCHY}
 y_conf = {level: [] for level in HIERARCHY}
 
-print("Ejecutando búsqueda simple...")
-for i, (embedding, (_, row)) in enumerate(zip(test_embeddings, test_df.iterrows())):
+print("Ejecutando búsqueda simple en lote...")
+batch_predictions, batch_confidences = simple_search_batched(test_embeddings, client)
+
+for i, ((_, row), prediction, confidences) in enumerate(zip(test_df.iterrows(), batch_predictions, batch_confidences)):
     true_tax = {level: str(row[level]) if pd.notna(row[level]) else "Unknown" for level in HIERARCHY}
-    
-    prediction, confidences = simple_search_from_embedding(embedding, collection)
     
     for level in HIERARCHY:
         y_true[level].append(true_tax[level])

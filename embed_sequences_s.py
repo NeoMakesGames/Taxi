@@ -1,7 +1,7 @@
 import pandas as pd
 import torch
 from transformers import AutoTokenizer, AutoModel
-import chromadb
+from pymilvus import MilvusClient
 from tqdm import tqdm
 import os
 from sklearn.model_selection import train_test_split
@@ -9,7 +9,7 @@ from sklearn.model_selection import train_test_split
 # Configuración
 CSV_PATH = 'data/final_dataset.csv'
 MODEL_NAME = 'zhihan1996/DNABERT-S'
-CHROMA_DB_PATH = 'chroma_db'
+MILVUS_DB_PATH = 'milvus_db/milvus.db'
 COLLECTION_NAME = 'dna_sequences_s'
 BATCH_SIZE = 16  # Tamaño de lote conservador para evitar OOM
 MAX_LEN = 256 
@@ -28,17 +28,37 @@ except Exception as e:
     print(f"Error cargando el modelo: {e}")
     exit(1)
 
-# Inicializar ChromaDB
-print("Inicializando ChromaDB...")
+# Inicializar Milvus
+print("Inicializando Milvus...")
 try:
-    client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
-    # Usar Hierarchical Navigable Small World (HNSW) con similitud de Coseno
-    collection = client.get_or_create_collection(
-        name=COLLECTION_NAME,
-        metadata={"hnsw:space": "cosine"}
-    )
+    if not os.path.exists(os.path.dirname(MILVUS_DB_PATH)):
+        os.makedirs(os.path.dirname(MILVUS_DB_PATH))
+    
+    client = MilvusClient(uri=MILVUS_DB_PATH)
+    
+    if client.has_collection(COLLECTION_NAME):
+        print(f"Colección '{COLLECTION_NAME}' ya existe.")
+    else:
+        index_params = client.prepare_index_params()
+        index_params.add_index(
+            field_name="vector",
+            index_type="HNSW",
+            metric_type="COSINE",
+            params={"M": 16, "efConstruction": 500}
+        )
+
+        client.create_collection(
+            collection_name=COLLECTION_NAME,
+            dimension=768,
+            id_type="string",
+            max_length=512,
+            metric_type="COSINE",
+            auto_id=False,
+            index_params=index_params
+        )
+        print(f"Colección '{COLLECTION_NAME}' creada con índice HNSW.")
 except Exception as e:
-    print(f"Error inicializando ChromaDB: {e}")
+    print(f"Error inicializando Milvus: {e}")
     exit(1)
 
 # Función para generar embeddings
@@ -125,16 +145,23 @@ for i in tqdm(range(0, total_rows, BATCH_SIZE), desc="Lotes de embeddings"):
         # Generar embeddings
         embeddings = get_embeddings(sequences)
         
-        # Agregar a ChromaDB
-        collection.upsert(
-            ids=headers,
-            embeddings=embeddings.tolist(),
-            metadatas=metadatas,
-            documents=sequences
+        # Agregar a Milvus
+        data = []
+        for j in range(len(sequences)):
+            data.append({
+                "id": headers[j],
+                "vector": embeddings[j].tolist(),
+                "sequence": sequences[j],
+                **metadatas[j]
+            })
+            
+        client.upsert(
+            collection_name=COLLECTION_NAME,
+            data=data
         )
         
     except Exception as e:
         print(f"Error procesando lote comenzando en índice {i}: {e}")
         continue
 
-print("¡Hecho! Embeddings almacenados en ChromaDB.")
+print("¡Hecho! Embeddings almacenados en Milvus.")

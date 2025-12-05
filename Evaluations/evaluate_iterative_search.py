@@ -1,7 +1,7 @@
 import pandas as pd
 import torch
 from transformers import AutoTokenizer, AutoModel
-import chromadb
+from pymilvus import MilvusClient
 from tqdm import tqdm
 import os
 import numpy as np
@@ -12,10 +12,10 @@ from sklearn.metrics import accuracy_score, recall_score, f1_score, precision_sc
 # Configuración
 CSV_PATH = 'data/final_dataset.csv'
 MODEL_NAME = 'zhihan1996/DNABERT-2-117M'
-CHROMA_DB_PATH = 'chroma_db'
+MILVUS_DB_PATH = 'milvus_db/milvus.db'
 COLLECTION_NAME = 'dna_sequences'
 MAX_LEN = 256 
-K_NEIGHBORS = 10 
+K_NEIGHBORS = 20 
 HIERARCHY = ['Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species']
 
 # Inicializar Dispositivo
@@ -32,14 +32,13 @@ except Exception as e:
     print(f"Error cargando el modelo: {e}")
     exit(1)
 
-# Inicializar ChromaDB
-print("Conectando a ChromaDB...")
+# Inicializar Milvus
+print("Conectando a Milvus...")
 try:
-    client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
-    collection = client.get_collection(name=COLLECTION_NAME)
-    print(f"Conectado a la colección '{COLLECTION_NAME}' con {collection.count()} documentos.")
+    client = MilvusClient(uri=MILVUS_DB_PATH)
+    print(f"Conectado a Milvus.")
 except Exception as e:
-    print(f"Error conectando a ChromaDB: {e}")
+    print(f"Error conectando a Milvus: {e}")
     exit(1)
 
 # Recargar Datos de Prueba
@@ -108,39 +107,45 @@ def get_embeddings_batched(sequences, batch_size=8):
     return np.vstack(all_embeddings)
 
 # Lógica de Búsqueda Iterativa (Optimizada)
-def iterative_search_from_embedding(embedding, collection, k=K_NEIGHBORS):
-    print("DEBUG: Starting iterative search for a sample")
+def iterative_search_from_embedding(embedding, client, k=K_NEIGHBORS):
+    # print("DEBUG: Starting iterative search for a sample")
     current_filter = {} # Removed "split": "train" as DB only contains train data
     predicted_taxonomy = {}
     
-    for level in HIERARCHY:
-        # Construir cláusula where de ChromaDB
-        where_clause = None
-        if current_filter:
-            if len(current_filter) > 1:
-                where_clause = {"$and": [{k: v} for k, v in current_filter.items()]}
-            else:
-                where_clause = current_filter
+    # Dynamic K: Start at K_NEIGHBORS and decay to 1
+    k_values = np.linspace(k, 1, len(HIERARCHY))
+    k_values = [int(round(x)) for x in k_values]
+    k_values = [max(1, x) for x in k_values]
 
-        # Consultar ChromaDB con filtro actual
+    for i, level in enumerate(HIERARCHY):
+        current_k = k_values[i]
+        
+        # Construir filtro de Milvus
+        filter_expr = ""
+        if current_filter:
+            conditions = [f'{key} == "{value}"' for key, value in current_filter.items()]
+            filter_expr = " and ".join(conditions)
+
+        # Consultar Milvus con filtro actual
         try:
-            print(f"DEBUG: Querying level {level} with filter {where_clause}")
-            results = collection.query(
-                query_embeddings=[embedding.tolist()],
-                n_results=k,
-                where=where_clause,
-                include=['metadatas'] # Optimización: Solo obtener metadatos
+            # print(f"DEBUG: Querying level {level} with filter {filter_expr}")
+            results = client.search(
+                collection_name=COLLECTION_NAME,
+                data=[embedding.tolist()],
+                limit=current_k,
+                filter=filter_expr,
+                output_fields=[level]
             )
-            print(f"DEBUG: Query returned for {level}")
+            # print(f"DEBUG: Query returned for {level}")
         except Exception as e:
-            print(f"Error querying ChromaDB at level {level}: {e}")
+            print(f"Error querying Milvus at level {level}: {e}")
             break
         
-        if not results['metadatas'] or not results['metadatas'][0]:
+        if not results or not results[0]:
             break
             
-        metadatas = results['metadatas'][0]
-        values = [m.get(level, "Unknown") for m in metadatas]
+        hits = results[0]
+        values = [hit['entity'].get(level, "Unknown") for hit in hits]
         
         if not values:
             break
@@ -196,7 +201,7 @@ def process_single_sample(args):
     embedding, (_, row) = args
     true_tax = {level: str(row[level]) if pd.notna(row[level]) else "Unknown" for level in HIERARCHY}
     
-    prediction, overall_score = iterative_search_from_embedding(embedding, collection)
+    prediction, overall_score = iterative_search_from_embedding(embedding, client)
     
     pred_result = {}
     for level in HIERARCHY:
