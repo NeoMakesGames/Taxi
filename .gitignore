@@ -6,5 +6,5 @@ data/test_dataset_cache.csv
 DNABERT_finetune/dnabert_env/
 DNABERT_finetune/__pycache__/
 DNABERT_finetune/debug_output/
-DNABERT_finetune/
 *.log
+data/test_embeddings_s.npy
