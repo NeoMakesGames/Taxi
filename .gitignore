@@ -7,4 +7,4 @@ DNABERT_finetune/dnabert_env/
 DNABERT_finetune/__pycache__/
 DNABERT_finetune/debug_output/
 *.log
-data/test_embeddings_s.npy
+
