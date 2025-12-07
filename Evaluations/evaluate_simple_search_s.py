@@ -22,6 +22,7 @@ MAX_LEN = 256
 K_NEIGHBORS = 1
 K_ENTROPY = 10
 HIERARCHY = ['Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species']
+EMBEDDINGS_PATH = 'data/test_embeddings_s.npy'
 
 # Inicializar Dispositivo
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -187,9 +188,17 @@ def simple_search_batched(embeddings, client, k=K_NEIGHBORS, batch_size=100):
 print(f"Iniciando evaluación simple en {len(test_df)} muestras...")
 
 # Pre-calcular embeddings
-print("Pre-calculando embeddings para el conjunto de prueba...")
-test_sequences = test_df['Sequence'].astype(str).tolist()
-test_embeddings = get_embeddings_batched(test_sequences, batch_size=128)
+if os.path.exists(EMBEDDINGS_PATH):
+    print(f"Cargando embeddings pre-calculados desde {EMBEDDINGS_PATH}...")
+    test_embeddings = np.load(EMBEDDINGS_PATH)
+    if len(test_embeddings) != len(test_df):
+        print(f"Advertencia: El número de embeddings ({len(test_embeddings)}) no coincide con el número de muestras de prueba ({len(test_df)}). Recalculando...")
+        test_sequences = test_df['Sequence'].astype(str).tolist()
+        test_embeddings = get_embeddings_batched(test_sequences, batch_size=128)
+else:
+    print("Pre-calculando embeddings para el conjunto de prueba...")
+    test_sequences = test_df['Sequence'].astype(str).tolist()
+    test_embeddings = get_embeddings_batched(test_sequences, batch_size=128)
 
 y_true = {level: [] for level in HIERARCHY}
 y_pred = {level: [] for level in HIERARCHY}
