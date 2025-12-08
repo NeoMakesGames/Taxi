@@ -12,7 +12,7 @@ MODEL_NAME = 'zhihan1996/DNABERT-S'
 MILVUS_DB_PATH = 'milvus_db/milvus.db'
 COLLECTION_NAME = 'dna_sequences_s'
 BATCH_SIZE = 16  # Tamaño de lote conservador para evitar OOM
-MAX_LEN = 256 
+MAX_LEN = 768
 
 # Inicializar Dispositivo
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
