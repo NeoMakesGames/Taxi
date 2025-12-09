@@ -5,13 +5,15 @@ from pymilvus import MilvusClient
 from tqdm import tqdm
 import os
 from sklearn.model_selection import train_test_split
+import traceback
 
 # Configuración
 CSV_PATH = 'data/final_dataset.csv'
 MODEL_NAME = 'zhihan1996/DNABERT-S'
-MILVUS_DB_PATH = 'milvus_db/milvus.db'
+MILVUS_DB_PATH = 'gpuhub-tmp/milvus_db/milvus.db'
 COLLECTION_NAME = 'dna_sequences_s'
-BATCH_SIZE = 16  # Tamaño de lote conservador para evitar OOM
+BATCH_SIZE = 16
+INSERT_BATCH_SIZE = 2048
 MAX_LEN = 768
 
 # Inicializar Dispositivo
@@ -39,24 +41,16 @@ try:
     if client.has_collection(COLLECTION_NAME):
         print(f"Colección '{COLLECTION_NAME}' ya existe.")
     else:
-        index_params = client.prepare_index_params()
-        index_params.add_index(
-            field_name="vector",
-            index_type="HNSW",
-            metric_type="COSINE",
-            params={"M": 16, "efConstruction": 500}
-        )
-
+        # Crear colección SIN índice vector para acelerar la inserción
         client.create_collection(
             collection_name=COLLECTION_NAME,
             dimension=768,
             id_type="string",
             max_length=512,
             metric_type="COSINE",
-            auto_id=False,
-            index_params=index_params
+            auto_id=False
         )
-        print(f"Colección '{COLLECTION_NAME}' creada con índice HNSW.")
+        print(f"Colección '{COLLECTION_NAME}' creada (sin índice inicial).")
 except Exception as e:
     print(f"Error inicializando Milvus: {e}")
     exit(1)
@@ -118,6 +112,8 @@ num_batches = (total_rows + BATCH_SIZE - 1) // BATCH_SIZE
 
 print(f"Iniciando generación de embeddings para {total_rows} secuencias en {num_batches} lotes...")
 
+data_buffer = []
+
 for i in tqdm(range(0, total_rows, BATCH_SIZE), desc="Lotes de embeddings"):
     batch_df = processing_df.iloc[i : i + BATCH_SIZE]
     
@@ -145,23 +141,54 @@ for i in tqdm(range(0, total_rows, BATCH_SIZE), desc="Lotes de embeddings"):
         # Generar embeddings
         embeddings = get_embeddings(sequences)
         
-        # Agregar a Milvus
-        data = []
+        # Agregar al buffer
         for j in range(len(sequences)):
-            data.append({
+            data_buffer.append({
                 "id": headers[j],
                 "vector": embeddings[j].tolist(),
                 "sequence": sequences[j],
                 **metadatas[j]
             })
             
-        client.upsert(
-            collection_name=COLLECTION_NAME,
-            data=data
-        )
+        # Insertar en Milvus si el buffer está lleno
+        if len(data_buffer) >= INSERT_BATCH_SIZE:
+            client.upsert(
+                collection_name=COLLECTION_NAME,
+                data=data_buffer
+            )
+            data_buffer = [] # Limpiar buffer
         
     except Exception as e:
         print(f"Error procesando lote comenzando en índice {i}: {e}")
-        continue
+        traceback.print_exc()
+        break
 
-print("¡Hecho! Embeddings almacenados en Milvus.")
+# Insertar datos restantes
+if data_buffer:
+    print(f"Insertando {len(data_buffer)} elementos restantes...")
+    try:
+        client.upsert(
+            collection_name=COLLECTION_NAME,
+            data=data_buffer
+        )
+    except Exception as e:
+        print(f"Error insertando lote final: {e}")
+
+print("Generando índice HNSW...")
+try:
+    index_params = client.prepare_index_params()
+    index_params.add_index(
+        field_name="vector",
+        index_type="AUTOINDEX",
+        metric_type="COSINE",
+        params={}
+    )
+    client.create_index(
+        collection_name=COLLECTION_NAME,
+        index_params=index_params
+    )
+    print("Índice creado exitosamente.")
+except Exception as e:
+    print(f"Nota al crear índice: {e}")
+
+print("¡Hecho! Embeddings almacenados e indexados en Milvus.")
