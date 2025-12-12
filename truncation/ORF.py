@@ -10,7 +10,7 @@ MIN_RAW_SEQUENCE_LENGTH = 250
 GENETIC_CODE = 5 
 MIN_PROTEIN_LENGTH = 80 
 CHECKPOINT_LEVEL = 'Species'
-OUTPUT_PARQUET_PATH = 'coi_validated_df_leray.parquet' # Updated filename
+OUTPUT_PARQUET_PATH = 'coi_validated_df_leray.parquet' 
 # -------------------------------------------
 
 def is_functional_coi(sequence: str) -> bool:
@@ -73,7 +73,7 @@ def filter_data_and_create_checkpoint(input_csv_path, output_fasta_path, checkpo
     print(f"Validated DataFrame (full taxonomy) saved to: {OUTPUT_PARQUET_PATH}")
     # ... (rest of summary) ...
 
-# --- Example Usage ---
+# --- Usage ---
 filter_data_and_create_checkpoint(
      input_csv_path='dataset_animalia.csv', 
      output_fasta_path='coi_orf_validated_leray.fasta',

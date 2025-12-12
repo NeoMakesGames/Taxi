@@ -10,6 +10,10 @@ import time
 import numpy as np
 import traceback
 
+"""
+Script hecho para trabajar con 8 nucleos tener en cuenta
+"""
+
 # -------------------
 # User config
 # -------------------
@@ -35,6 +39,9 @@ DEBUG = False
 # -------------------
 # Primer sets
 # -------------------
+"""
+Para agregar mas opciones antes del fallback agregar primers al diccionario
+"""
 PRIMER_SETS = {
     "folmer": {
         "fwd": "GGTCAACAAATCATAAAGATATTGG",
